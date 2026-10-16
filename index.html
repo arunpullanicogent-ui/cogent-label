@@ -1,0 +1,171 @@
+<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Cogent Automation – Label Printer</title>
+<style>
+body{font:14px system-ui,Segoe UI,sans-serif;margin:0;background:#f3f4f6;color:#111}
+header{background:#111;color:#fff;padding:10px 16px;font-weight:700}main{padding:12px 16px;max-width:1300px;margin:auto}
+.bar{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;align-items:center}
+button{background:#111;color:#fff;border:0;padding:8px 12px;border-radius:5px;cursor:pointer;font-size:13px}
+button.sec{background:#e5e7eb;color:#111}button.red{background:#b91c1c}button:disabled{opacity:.4}
+.card{background:#fff;border-radius:8px;padding:12px;box-shadow:0 1px 3px #0002;margin-bottom:12px}
+.grid{display:grid;grid-template-columns:1fr 440px;gap:12px}@media(max-width:1000px){.grid{grid-template-columns:1fr}}
+table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:4px 6px;border-bottom:1px solid #eee;font-size:12px}
+tr.cur{background:#eef2ff}input[type=text],input[type=number]{padding:4px;border:1px solid #bbb;border-radius:4px;width:100%;box-sizing:border-box}
+.drop{border:2px dashed #999;border-radius:8px;padding:14px;text-align:center;margin-bottom:10px;background:#fafafa}.drop.over{background:#e0e7ff;border-color:#4f46e5}
+.prev{width:400px;max-width:100%;aspect-ratio:50/30;border:1px solid #999;background:#fff;overflow:hidden}.prev iframe{width:100%;height:100%;border:0}
+.warn{background:#fef3c7;border:1px solid #f59e0b;padding:8px;border-radius:5px;margin-bottom:10px}.err{color:#b91c1c}.ok{color:#15803d}.hide{display:none}
+</style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
+</head><body>
+<header>COGENT Automation – Label Printer (50 × 30 mm)</header>
+<main>
+<input id="pdfIn" type="file" accept="application/pdf" multiple hidden><input id="logoIn" type="file" accept=".png,.jpg,.jpeg,.svg" hidden>
+<div class="bar">
+ <button onclick="pdfIn.click()">1. Upload PDF Files</button><button onclick="logoIn.click()">2. Upload Company Logo</button>
+ <button class="sec" onclick="tab('main');if(!S.cur&&S.rows[0])pick(S.rows[0].id)">3. Preview Label</button>
+ <button class="sec" onclick="tab('main');selAll()">4. Select Drawings</button>
+ <button id="bPrint" onclick="doPrint()">5. Print Selected Labels</button>
+ <button id="bDl" class="sec" onclick="doDownload()">6. Download Combined PDF</button>
+ <button class="sec" onclick="tab('history')">7. Print History</button><button class="sec" onclick="tab('settings')">8. Settings</button></div>
+<div id="warn" class="warn hide"></div><div id="msgs" class="card hide"></div>
+
+<div id="t-main" class="grid"><div class="card">
+ <div id="drop" class="drop">Drag &amp; drop PDF drawings here, or <a href="#" onclick="pdfIn.click();return false">Browse Files</a> (Ctrl/Shift for multiple)</div>
+ <div class="bar"><input type="text" id="q" placeholder="Search part / drawing / filename…" style="max-width:260px">
+  <button class="sec" onclick="selAll()">Select All</button><button class="sec" onclick="S.sel.clear();render()">Clear Selection</button>
+  <button class="red" onclick="removeSel()">Remove Selected</button>
+  <label>Copies each: <input type="number" id="defC" min="1" max="500" value="1" style="width:60px"></label></div>
+ <table><thead><tr><th></th><th>Part No.</th><th>Drawing No.</th><th>PDF file</th><th>Copies</th><th>QR</th><th>Preview</th><th>Print status</th><th></th></tr></thead><tbody id="rows"></tbody></table>
+ <p id="empty">No drawings yet. Upload PDF files to begin.</p></div>
+ <div><div class="card"><b>Label preview (50 × 30 mm)</b><div class="prev"><iframe id="pv"></iframe></div>
+  <small id="qrTxt">Select a row to preview.</small></div>
+  <div class="card"><b>Print summary</b><div id="sum"></div><br>
+   <button onclick="doPrint()">Print Selected Labels</button> <button class="sec" onclick="selAll();doPrint()">Print All</button>
+   <button class="sec" onclick="S.sel.clear();S.copies={};render()">Clear Queue</button></div></div></div>
+
+<div id="t-history" class="card hide"><b>Print history</b><table><thead><tr><th>Date</th><th>Drawing</th><th>Copies</th><th>Method</th></tr></thead><tbody id="hist"></tbody></table></div>
+
+<div id="t-settings" class="grid hide"><div class="card"><b>Printing</b>
+ <p>Browsers cannot list or silently select printers. Click Print, choose your label printer in the dialog, and set <b>paper size 50 × 30 mm</b> (custom), <b>scale 100% / Actual size</b>, <b>margins None</b>. Choose "Save as PDF" as a fallback, or use Download Combined PDF.</p>
+ <button class="sec" onclick="testLabel()">Print Test Label</button><hr>
+ <b>QR Base URL</b><p><small>Permanent address phones use to open drawings. Labels printed later use the new value.</small></p>
+ <input type="text" id="base"></div>
+ <div class="card"><b>Logo</b><p id="logoBox"></p><button onclick="logoIn.click()">Upload / Replace Logo</button> <button class="red" onclick="delLogo()">Remove Logo</button>
+ <p>Max height (mm): <input type="number" id="lH" step="0.5" min="2" max="12"></p><p>Offset X (mm): <input type="number" id="lX" step="0.5"></p><p>Offset Y (mm): <input type="number" id="lY" step="0.5"></p>
+ <small>Aspect ratio is always preserved (fit inside 9 mm × height).</small></div></div>
+</main>
+<script>
+const $=s=>document.querySelector(s), esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const S={rows:[],sel:new Set(),copies:{},cur:null,cfg:Object.assign({baseUrl:'',logoH:7,logoX:0,logoY:0},JSON.parse(localStorage.cogentCfg||'{}')),logo:localStorage.cogentLogo||'',logoDim:null};
+const saveCfg=()=>localStorage.cogentCfg=JSON.stringify(S.cfg);
+async function api(u,o={}){const r=await fetch(u,o),j=await r.json().catch(()=>({}));if(!r.ok)throw Error(j.error||r.statusText);return j}
+const post=(u,b)=>api(u,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});
+function note(t,ok=true){const m=$('#msgs');m.classList.remove('hide');m.insertAdjacentHTML('afterbegin',`<div class="${ok?'ok':'err'}">${esc(t)}</div>`);while(m.children.length>8)m.lastChild.remove()}
+function tab(t){for(const x of['main','history','settings'])$('#t-'+x).classList.toggle('hide',x!==t);if(t==='history')api('/api/history').then(h=>$('#hist').innerHTML=h.map(x=>`<tr><td>${x.printed_at}</td><td>${esc(x.drawing_no)}</td><td>${x.copies}</td><td>${esc(x.method||'')}</td></tr>`).join(''));if(t==='settings')settingsUI()}
+const defC=()=>Math.max(1,parseInt($('#defC').value)||1), cp=id=>S.copies[id]??defC(), vis=()=>{const q=$('#q').value.toLowerCase();return S.rows.filter(r=>(r.part_no+r.drawing_no+r.filename).toLowerCase().includes(q))};
+const chosen=()=>S.rows.filter(r=>S.sel.has(r.id));
+function selAll(){vis().forEach(r=>S.sel.add(r.id));render()}
+async function load(){S.rows=(await api('/api/list')).reverse();render()}
+function render(){
+ $('#empty').style.display=S.rows.length?'none':'';
+ $('#rows').innerHTML=vis().map(r=>`<tr class="${S.cur===r.id?'cur':''}" onclick="pick(${r.id})">
+ <td><input type="checkbox" ${S.sel.has(r.id)?'checked':''} onclick="event.stopPropagation();tog(${r.id},this.checked)"></td>
+ <td><input type="text" value="${esc(r.part_no)}" onclick="event.stopPropagation()" onchange="upd(${r.id},this.value,null)"></td>
+ <td><input type="text" value="${esc(r.drawing_no)}" onclick="event.stopPropagation()" onchange="upd(${r.id},null,this.value)"></td>
+ <td>${esc(r.filename)}</td><td><input type="number" min="1" max="500" style="width:55px" value="${cp(r.id)}" onclick="event.stopPropagation()" onchange="S.copies[${r.id}]=Math.max(1,+this.value||1);sum()"></td>
+ <td class="${r.file_exists?'ok':'err'}">${r.file_exists?'Ready':'FILE MISSING'}</td><td>${S.cur===r.id?'Shown':r.file_exists?'Ready':'—'}</td>
+ <td>${r.labels_printed?r.labels_printed+' printed ('+r.last_printed_at+')':'Not printed'}</td>
+ <td><button class="sec" onclick="event.stopPropagation();download([{d:S.rows.find(x=>x.id==${r.id}),copies:cp(${r.id})}],'${esc(r.drawing_no)}.pdf')">PDF</button></td></tr>`).join('');sum()}
+function sum(){const c=chosen(),n=c.reduce((a,r)=>a+cp(r.id),0);$('#sum').innerHTML=`Drawings selected: ${c.length}<br>Total labels: ${n}<br>Missing files: ${c.filter(r=>!r.file_exists).length}`;$('#bPrint').disabled=$('#bDl').disabled=!c.length}
+const tog=(id,on)=>{on?S.sel.add(id):S.sel.delete(id);sum()};
+async function upd(id,p,d){const r=S.rows.find(x=>x.id===id);try{await post('/api/update',{id,part_no:p??r.part_no,drawing_no:d??r.drawing_no});await load();pick(id)}catch(e){note(e.message,false);load()}}
+async function removeSel(){if(!S.sel.size||!confirm(`Delete ${S.sel.size} drawing(s) and their stored PDFs? Printed QR codes for them will stop working.`))return;for(const id of S.sel)await post('/api/delete',{id});S.sel.clear();S.cur=null;$('#pv').src='about:blank';load()}
+
+// ---- upload ----
+async function upload(files){const ids=[];for(const f of files){try{const buf=await f.arrayBuffer();
+ if(!/\.pdf$/i.test(f.name)||new TextDecoder().decode(buf.slice(0,5))!=='%PDF-')throw Error('Not a valid PDF');
+ const r=await api('/api/upload?name='+encodeURIComponent(f.name),{method:'POST',headers:{'Content-Type':'application/pdf'},body:buf});
+ ids.push(r.id);note(f.name+(r.status==='duplicate'?': already uploaded (existing record reused)':': uploaded'),r.status==='ok')}catch(e){note(f.name+': '+e.message,false)}}
+ ids.forEach(i=>S.sel.add(i));await load();if(ids.length)pick(ids[0])}
+pdfIn.onchange=e=>{upload([...e.target.files]);e.target.value=''};
+const dz=$('#drop');dz.ondragover=e=>{e.preventDefault();dz.classList.add('over')};dz.ondragleave=()=>dz.classList.remove('over');dz.ondrop=e=>{e.preventDefault();dz.classList.remove('over');upload([...e.dataTransfer.files])};
+$('#q').oninput=render;$('#defC').onchange=()=>{S.copies={};render()};
+
+// ---- logo (converted to transparent PNG, stored in this browser) ----
+logoIn.onchange=async e=>{const f=e.target.files[0];e.target.value='';if(!f)return;
+ if(!/\.(png|jpe?g|svg)$/i.test(f.name))return note('Logo must be PNG, JPG or SVG',false);
+ const url=await new Promise(r=>{const fr=new FileReader();fr.onload=()=>r(fr.result);fr.readAsDataURL(f)});
+ const img=new Image();img.onload=()=>{let w=img.naturalWidth||512,h=img.naturalHeight||512,k=Math.min(1,800/Math.max(w,h))*(Math.max(w,h)<300?300/Math.max(w,h):1);
+  const c=document.createElement('canvas');c.width=Math.round(w*k);c.height=Math.round(h*k);c.getContext('2d').drawImage(img,0,0,c.width,c.height);
+  S.logo=c.toDataURL('image/png');localStorage.cogentLogo=S.logo;S.logoDim=[c.width,c.height];note('Logo saved');settingsUI();refresh()};
+ img.onerror=()=>note('Could not read the logo file',false);img.src=url};
+function delLogo(){S.logo='';S.logoDim=null;localStorage.removeItem('cogentLogo');settingsUI();refresh()}
+function loadLogoDim(){if(!S.logo)return Promise.resolve();return new Promise(r=>{const i=new Image();i.onload=()=>{S.logoDim=[i.naturalWidth,i.naturalHeight];r()};i.src=S.logo})}
+function settingsUI(){$('#base').value=S.cfg.baseUrl;$('#lH').value=S.cfg.logoH;$('#lX').value=S.cfg.logoX;$('#lY').value=S.cfg.logoY;
+ $('#logoBox').innerHTML=S.logo?`<img src="${S.logo}" style="max-height:60px;max-width:200px;background:#eee">`:'No logo (text name only).'}
+$('#base').onchange=()=>{try{new URL($('#base').value)}catch{return note('Invalid Base URL',false)}S.cfg.baseUrl=$('#base').value.replace(/\/+$/,'');saveCfg();warn();refresh()};
+for(const[k,id]of[['logoH','lH'],['logoX','lX'],['logoY','lY']])$('#'+id).onchange=()=>{S.cfg[k]=+$('#'+id).value||0;saveCfg();refresh()};
+function warn(){const w=$('#warn');let h='';try{h=new URL(S.cfg.baseUrl).hostname}catch{}const priv=/^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(h);
+ w.classList.toggle('hide',!priv);w.textContent=`⚠ QR codes use ${S.cfg.baseUrl || 'no configured base URL'}. For phone scanning, use the PC's reachable LAN address in Settings and keep this app running on the same Wi-Fi network. Public access requires server hosting.`}
+
+// ---- label drawing: exactly 50 x 30 mm ----
+function fit(doc,t,font,max,start,min=2.8){doc.setFont('helvetica',font);let s=start;doc.setFontSize(s);while(s>min&&doc.getTextWidth(t)>max){s-=.2;doc.setFontSize(s)}}
+const stampNow=()=>{const d=new Date(),p=n=>String(n).padStart(2,'0');return`${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`};
+function buildPdf(items){
+ const{jsPDF}=window.jspdf;
+ // jsPDF uses millimetres: every output page is physically 50 × 30 mm.
+ const doc=new jsPDF({unit:'mm',format:[50,30],orientation:'landscape',compress:true});
+ const stamp=stampNow();let first=true;
+ for(const{d,copies}of items){
+  const target=`${S.cfg.baseUrl.replace(/\/+$/,'')}/d/${d.token}`;
+  const qr=qrcode(0,'Q');qr.addData(target);qr.make();const n=qr.getModuleCount();
+  for(let c=0;c<copies;c++){
+   if(!first)doc.addPage([50,30],'landscape');first=false;
+   doc.setTextColor(0);doc.setFillColor(255,255,255);doc.rect(0,0,50,30,'F');
+   // Company mark / wordmark: use a complete uploaded logo when provided,
+   // otherwise use a text fallback. Preserve the logo's aspect ratio.
+   if(S.logo&&S.logoDim){
+    const maxW=21.5,maxH=Math.max(2,Math.min(10,+S.cfg.logoH||7.8)),k=Math.min(maxW/S.logoDim[0],maxH/S.logoDim[1]);
+    const iw=S.logoDim[0]*k,ih=S.logoDim[1]*k;
+    const x=1.5+S.cfg.logoX,y=0.8+S.cfg.logoY+(maxH-ih)/2;
+    try{doc.addImage(S.logo,'PNG',x,y,iw,ih)}catch{}
+   }else{
+    doc.setFont('helvetica','bold');doc.setFontSize(7.8);doc.text('COGENT',1.5,1.0,{baseline:'top'});
+    doc.setFont('helvetica','normal');doc.setFontSize(6.4);doc.text('Automation',1.5,4.4,{baseline:'top'});
+   }
+   // Large part number on the left.
+   fit(doc,d.part_no,'bold',29,24,3.2);doc.text(d.part_no,1.5,15.0,{baseline:'middle'});
+   // White quiet zone around a high-contrast vector QR code.
+   const qs=16.2,qx=32.7,qy=1.0,pad=0.55,cell=qs/n;
+   doc.setFillColor(255,255,255);doc.rect(qx-pad,qy-pad,qs+2*pad,qs+2*pad,'F');
+   doc.setFillColor(0,0,0);
+   for(let y=0;y<n;y++)for(let x=0;x<n;x++)if(qr.isDark(y,x))doc.rect(qx+x*cell,qy+y*cell,cell+0.015,cell+0.015,'F');
+   // Full drawing ID directly beneath the QR; shrink only as needed.
+   fit(doc,d.drawing_no,'bold',18.4,5.4,3.0);doc.text(d.drawing_no,49,18.5,{align:'right',baseline:'top'});
+   // Timestamp mirrors the supplied sample while fitting the compact label.
+   doc.setFont('helvetica','normal');doc.setFontSize(4.8);doc.text('Print date:',1.5,25.0,{baseline:'top'});
+   doc.setFontSize(5.0);doc.text(stamp,48.5,25.0,{align:'right',baseline:'top'});
+  }
+ }
+ return doc
+}
+function pick(id){S.cur=id;render();refresh()}
+function refresh(){const d=S.rows.find(r=>r.id===S.cur);if(!d)return;loadLogoDim().then(()=>{
+ $('#pv').src=URL.createObjectURL(buildPdf([{d,copies:1}]).output('blob'))+'#toolbar=0&navpanes=0&view=Fit';$('#qrTxt').textContent='QR → '+S.cfg.baseUrl+'/d/'+d.token})}
+function download(items,name){loadLogoDim().then(()=>buildPdf(items).save(name))}
+const doDownload=()=>download(chosen().map(r=>({d:r,copies:cp(r.id)})),'labels.pdf');
+function printBlob(doc){const f=document.createElement('iframe');f.style.cssText='position:fixed;width:0;height:0;border:0;right:0;bottom:0';
+ f.src=URL.createObjectURL(doc.output('blob'));f.onload=()=>{try{f.contentWindow.focus();f.contentWindow.print()}catch{window.open(f.src)}};document.body.appendChild(f);setTimeout(()=>f.remove(),180000)}
+async function doPrint(){const c=chosen();if(!c.length)return note('Select at least one drawing',false);
+ const miss=c.filter(r=>!r.file_exists).length,available=c.filter(r=>r.file_exists),n=available.reduce((a,r)=>a+cp(r.id),0);
+ if(!available.length)return note('No selected drawings have an available PDF file.',false);
+ if(!confirm(`PRINT SUMMARY\nDrawings selected: ${c.length}\nPrintable drawings: ${available.length}\nTotal labels to print: ${n}\nMissing files: ${miss}\n\nProceed?`))return;
+ await loadLogoDim();const items=available.map(r=>({d:r,copies:cp(r.id)}));printBlob(buildPdf(items));
+ await post('/api/printed',{items:items.map(i=>({id:i.d.id,copies:i.copies})),method:'browser'});
+ note(`${n} label(s) sent. In the print dialog: paper 50×30 mm, scale 100% / Actual size, margins None.`);load()}
+async function testLabel(){await loadLogoDim();printBlob(buildPdf([{d:{token:'test',part_no:'CA191',drawing_no:'CA191-050-000-002'},copies:1}]))}
+
+(async()=>{if(!window.jspdf||!window.qrcode)note('Could not load the PDF/QR libraries (internet needed the first time). Check your connection and reload.',false);
+ if(!S.cfg.baseUrl){try{S.cfg.baseUrl=(await api('/api/config')).baseUrl}catch{S.cfg.baseUrl=location.origin}saveCfg()}
+ warn();await loadLogoDim();load()})();
+</script></body></html>

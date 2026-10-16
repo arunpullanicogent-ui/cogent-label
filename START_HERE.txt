@@ -1,0 +1,9 @@
+COGENT AUTOMATION LABEL PRINTER
+
+1. Extract this ZIP to a normal folder on your Windows PC.
+2. Double-click start.bat.
+3. Open http://localhost:3000 if the browser does not open automatically.
+4. Keep the black PowerShell window open while using the app.
+5. Upload your PDFs and logo. Label size is 50 x 30 mm.
+
+For full instructions, read README.md.
